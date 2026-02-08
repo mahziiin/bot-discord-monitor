@@ -1,7 +1,7 @@
 {
-  "name": "bot-monitor-discord",
-  "version": "1.0.0",
-  "description": "Bot para monitorar sites",
+  "name": "bot-monitor",
+  "version": "2.0.0",
+  "description": "Bot para monitorar sites com histórico persistente",
   "main": "bot.js",
   "scripts": {
     "start": "node bot.js"
