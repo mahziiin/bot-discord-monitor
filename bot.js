@@ -1,6 +1,8 @@
 const { Client, GatewayIntentBits, EmbedBuilder } = require('discord.js');
 const axios = require('axios');
 const cheerio = require('cheerio');
+const fs = require('fs').promises;
+const path = require('path');
 
 console.log("🚀 Iniciando bot de monitoramento...");
 
@@ -8,21 +10,17 @@ console.log("🚀 Iniciando bot de monitoramento...");
 const CONFIG = {
     token: process.env.DISCORD_TOKEN,
     checkInterval: 5 * 60 * 1000, // 5 minutos
-    channelName: 'notificacoes'   // ALTERE AQUI SE QUISER OUTRO NOME
+    channelName: 'notificacoes',
+    historyFile: 'history.json'
 };
 
 // Verificar token
 if (!CONFIG.token) {
     console.error('❌ ERRO: DISCORD_TOKEN não configurado!');
-    console.log('👉 Configure no Render.com:');
-    console.log('   1. Vá em "Environment"');
-    console.log('   2. Clique "Add Environment Variable"');
-    console.log('   3. Key: DISCORD_TOKEN');
-    console.log('   4. Value: seu_token_do_discord');
     process.exit(1);
 }
 
-// SITES PARA MONITORAR (NOMES CORRIGIDOS)
+// SITES PARA MONITORAR
 const SITES = [
     {
         name: 'Diário Oficial CONSAÚDE',
@@ -44,8 +42,8 @@ const SITES = [
     }
 ];
 
-// Histórico de itens já detectados
-const detectedItems = {
+// Histórico (será carregado do arquivo)
+let detectedItems = {
     diario: [],
     concurso: [], 
     prefeitura: []
@@ -60,50 +58,113 @@ const client = new Client({
     ]
 });
 
-// FUNÇÃO PARA VERIFICAR UM SITE
+// ==================== FUNÇÕES DE HISTÓRICO ====================
+
+// Salvar histórico em arquivo
+async function saveHistory() {
+    try {
+        await fs.writeFile(
+            CONFIG.historyFile, 
+            JSON.stringify(detectedItems, null, 2)
+        );
+        console.log('💾 Histórico salvo');
+    } catch (error) {
+        console.error('❌ Erro ao salvar histórico:', error.message);
+    }
+}
+
+// Carregar histórico do arquivo
+async function loadHistory() {
+    try {
+        const data = await fs.readFile(CONFIG.historyFile, 'utf8');
+        const loaded = JSON.parse(data);
+        
+        // Validar estrutura
+        if (loaded.diario && loaded.concurso && loaded.prefeitura) {
+            detectedItems = loaded;
+            console.log(`📚 Histórico carregado:`);
+            console.log(`   Diário: ${detectedItems.diario.length} itens`);
+            console.log(`   Concursos: ${detectedItems.concurso.length} itens`);
+            console.log(`   Prefeitura: ${detectedItems.prefeitura.length} itens`);
+        }
+    } catch (error) {
+        // Arquivo não existe ainda - criar novo
+        console.log('📝 Criando novo histórico...');
+        await saveHistory();
+    }
+}
+
+// Gerar ID único para um item (para evitar duplicatas)
+function generateItemId(text, siteType) {
+    // Extrair partes importantes para criar ID
+    const cleanText = text.toLowerCase()
+        .replace(/[^a-z0-9]/g, '')
+        .substring(0, 50);
+    
+    // Extrair datas (dd/mm/aaaa ou aaaa-mm-dd)
+    const dateMatch = text.match(/\d{2}\/\d{2}\/\d{4}|\d{4}-\d{2}-\d{2}/);
+    const datePart = dateMatch ? dateMatch[0].replace(/\D/g, '') : '';
+    
+    // Extrair números de edição
+    const editionMatch = text.match(/\d+\/\d+|\d+/);
+    const editionPart = editionMatch ? editionMatch[0].replace(/\D/g, '') : '';
+    
+    return `${siteType}_${editionPart}_${datePart}_${cleanText.substring(0, 20)}`;
+}
+
+// ==================== FUNÇÕES DE MONITORAMENTO ====================
+
 async function checkSite(site) {
     try {
         console.log(`  📄 Verificando: ${site.name}`);
         
-        // Fazer requisição
         const response = await axios.get(site.url, {
             timeout: 10000,
-            headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-            }
+            headers: { 'User-Agent': 'Mozilla/5.0' }
         });
         
-        // Extrair texto
         const text = response.data;
-        
-        // Buscar padrões
         const matches = text.match(site.pattern);
         const newItems = [];
         
         if (matches) {
             console.log(`    ✅ ${matches.length} padrão(ões) encontrado(s)`);
             
-            // Filtrar apenas novos itens
+            // Processar cada match
             matches.forEach(match => {
                 const cleanMatch = match.trim()
                     .replace(/\s+/g, ' ')
                     .substring(0, 200);
                 
-                // Verificar se já foi detectado
-                if (!detectedItems[site.type].includes(cleanMatch)) {
-                    newItems.push(cleanMatch);
-                    detectedItems[site.type].push(cleanMatch);
+                // Gerar ID único
+                const itemId = generateItemId(cleanMatch, site.type);
+                
+                // Verificar se já existe
+                if (!detectedItems[site.type].includes(itemId)) {
+                    newItems.push({
+                        text: cleanMatch,
+                        id: itemId,
+                        timestamp: new Date().toISOString()
+                    });
                     
-                    // Manter histórico limitado
-                    if (detectedItems[site.type].length > 50) {
-                        detectedItems[site.type].shift();
+                    detectedItems[site.type].push(itemId);
+                    
+                    // Limitar histórico a 100 itens por tipo
+                    if (detectedItems[site.type].length > 100) {
+                        detectedItems[site.type] = detectedItems[site.type].slice(-100);
                     }
                 }
             });
             
             if (newItems.length > 0) {
                 console.log(`    🎯 ${newItems.length} NOVO(S) ITEM(S)!`);
-                return newItems;
+                
+                // Salvar histórico imediatamente
+                await saveHistory();
+                
+                return newItems.map(item => item.text);
+            } else {
+                console.log(`    📭 Todos os itens já foram notificados anteriormente`);
             }
         }
         
@@ -115,27 +176,18 @@ async function checkSite(site) {
     }
 }
 
-// FUNÇÃO PARA ENVIAR NOTIFICAÇÃO
 async function sendNotification(site, newItems) {
     try {
-        // Encontrar canal
         const channel = client.channels.cache.find(ch => 
             ch.name === CONFIG.channelName && ch.isTextBased()
         );
         
         if (!channel) {
             console.log(`    ⚠️ Canal "${CONFIG.channelName}" não encontrado!`);
-            
-            // Tentar encontrar qualquer canal
-            const anyChannel = client.channels.cache.find(ch => ch.isTextBased());
-            if (anyChannel) {
-                console.log(`    ⚠️ Usando canal alternativo: ${anyChannel.name}`);
-                await anyChannel.send(`⚠️ **Aviso**: Por favor, crie um canal chamado \`${CONFIG.channelName}\` para as notificações automáticas.`);
-            }
             return;
         }
         
-        // Definir cor e emoji
+        // Definir estilo
         let color, emoji;
         switch (site.type) {
             case 'diario': color = 0x0099FF; emoji = '📰'; break;
@@ -144,16 +196,14 @@ async function sendNotification(site, newItems) {
             default: color = 0x7289DA; emoji = '📢';
         }
         
-        // Criar embed
         const embed = new EmbedBuilder()
             .setColor(color)
             .setTitle(`${emoji} NOVA ATUALIZAÇÃO - ${site.name}`)
             .setURL(site.url)
-            .setDescription(`**Fonte:** ${site.name}\n**URL:** [Clique para acessar](${site.url})`)
-            .setTimestamp()
-            .setFooter({ text: 'Monitoramento Automático • ' + new Date().getFullYear() });
+            .setDescription(`**Fonte:** ${site.name}\n**Hora:** ${new Date().toLocaleTimeString('pt-BR')}`)
+            .setTimestamp();
         
-        // Adicionar itens
+        // Adicionar itens (máximo 3)
         newItems.slice(0, 3).forEach((item, index) => {
             embed.addFields({
                 name: `📌 Item ${index + 1}`,
@@ -162,7 +212,14 @@ async function sendNotification(site, newItems) {
             });
         });
         
-        // Enviar
+        if (newItems.length > 3) {
+            embed.addFields({
+                name: '📊 Mais itens',
+                value: `+${newItems.length - 3} item(s) adicionais`,
+                inline: false
+            });
+        }
+        
         await channel.send({ embeds: [embed] });
         console.log(`    📨 Notificação enviada: ${newItems.length} item(s)`);
         
@@ -171,26 +228,30 @@ async function sendNotification(site, newItems) {
     }
 }
 
-// FUNÇÃO PRINCIPAL DE VERIFICAÇÃO
 async function checkAllSites() {
     console.log(`\n🔍 [${new Date().toLocaleTimeString('pt-BR')}] VERIFICAÇÃO INICIADA`);
     console.log('='.repeat(50));
+    
+    let totalNewItems = 0;
     
     for (const site of SITES) {
         const newItems = await checkSite(site);
         
         if (newItems.length > 0) {
             await sendNotification(site, newItems);
+            totalNewItems += newItems.length;
         }
         
-        // Aguardar 3 segundos entre sites
         await new Promise(resolve => setTimeout(resolve, 3000));
     }
     
-    console.log(`[${new Date().toLocaleTimeString('pt-BR')}] ✅ VERIFICAÇÃO CONCLUÍDA\n`);
+    console.log(`[${new Date().toLocaleTimeString('pt-BR')}] ✅ VERIFICAÇÃO CONCLUÍDA`);
+    console.log(`   📊 Total de novos itens: ${totalNewItems}`);
+    console.log('');
 }
 
-// COMANDOS DO BOT
+// ==================== COMANDOS ====================
+
 client.on('messageCreate', async (message) => {
     if (message.author.bot || !message.content.startsWith('!')) return;
     
@@ -225,7 +286,7 @@ client.on('messageCreate', async (message) => {
                     )
                     .addFields({
                         name: '⏱️ Configurações',
-                        value: `Verificação: A cada ${CONFIG.checkInterval / 60000} minutos\nCanal: ${CONFIG.channelName}`,
+                        value: `Verificação: A cada ${CONFIG.checkInterval / 60000} minutos\nCanal: ${CONFIG.channelName}\nPróxima: ${new Date(Date.now() + CONFIG.checkInterval).toLocaleTimeString('pt-BR')}`,
                         inline: false
                     })
                     .setTimestamp();
@@ -236,46 +297,53 @@ client.on('messageCreate', async (message) => {
             case 'verificar':
                 await message.reply('🔄 Verificando todos os sites agora...');
                 await checkAllSites();
-                await message.reply('✅ Verificação concluída!');
+                await message.reply(`✅ Verificação concluída!`);
                 break;
                 
-            case 'sites':
-                const sitesList = SITES.map(s => 
-                    `• **${s.name}**\n  🔗 ${s.url}\n  🔍 Padrão: \`${s.pattern.toString().slice(1, 30)}...\``
-                ).join('\n\n');
-                
-                const sitesEmbed = new EmbedBuilder()
-                    .setColor(0x5865F2)
-                    .setTitle('🌐 SITES MONITORADOS')
-                    .setDescription(sitesList)
-                    .setFooter({ text: 'O bot busca pelos padrões especificados' });
-                
-                await message.reply({ embeds: [sitesEmbed] });
+            case 'limpar':
+                // Comando para limpar histórico (apenas dono do bot)
+                if (message.author.id === 'SEU_ID_DO_DISCORD') {
+                    detectedItems = { diario: [], concurso: [], prefeitura: [] };
+                    await saveHistory();
+                    await message.reply('🧹 Histórico limpo! Próxima verificação notificará tudo como novo.');
+                } else {
+                    await message.reply('⛔ Apenas o administrador pode usar este comando.');
+                }
                 break;
                 
-            case 'historico':
-                const total = detectedItems.diario.length + detectedItems.concurso.length + detectedItems.prefeitura.length;
-                await message.reply(`📊 **Histórico total:** ${total} itens detectados\n` +
-                    `• Diário: ${detectedItems.diario.length}\n` +
-                    `• Concursos: ${detectedItems.concurso.length}\n` +
-                    `• Prefeitura: ${detectedItems.prefeitura.length}`);
+            case 'testar':
+                await message.reply('🧪 Testando detecção...');
+                
+                // Testar cada site individualmente
+                for (const site of SITES) {
+                    await message.channel.send(`**Testando:** ${site.name}`);
+                    const items = await checkSite(site);
+                    
+                    if (items.length > 0) {
+                        await message.channel.send(`✅ ${items.length} novo(s) item(s) detectado(s)`);
+                    } else {
+                        await message.channel.send(`📭 Nenhum novo item (já notificados: ${detectedItems[site.type].length})`);
+                    }
+                    
+                    await new Promise(resolve => setTimeout(resolve, 2000));
+                }
                 break;
                 
             case 'ajuda':
-                const ajudaEmbed = new EmbedBuilder()
-                    .setColor(0x57F287)
-                    .setTitle('❓ COMANDOS DISPONÍVEIS')
-                    .setDescription('Todos os comandos do bot:')
-                    .addFields(
-                        { name: '`!status`', value: 'Mostra status do sistema', inline: true },
-                        { name: '`!verificar`', value: 'Verifica sites manualmente', inline: true },
-                        { name: '`!sites`', value: 'Lista sites monitorados', inline: true },
-                        { name: '`!historico`', value: 'Mostra contagem de itens', inline: true },
-                        { name: '`!ajuda`', value: 'Mostra esta mensagem', inline: true }
-                    )
-                    .setFooter({ text: 'Verificação automática a cada 5 minutos' });
-                
-                await message.reply({ embeds: [ajudaEmbed] });
+                const ajuda = `
+**🤖 COMANDOS DISPONÍVEIS:**
+
+\`!status\` - Mostra status do sistema
+\`!verificar\` - Força verificação manual
+\`!testar\` - Testa cada site individualmente
+\`!ajuda\` - Mostra esta mensagem
+
+**🔧 Administrador:**
+\`!limpar\` - Limpa histórico de notificações
+
+O bot verifica automaticamente a cada 5 minutos.
+                `;
+                await message.reply(ajuda);
                 break;
                 
             case 'ping':
@@ -289,16 +357,18 @@ client.on('messageCreate', async (message) => {
     }
 });
 
-// QUANDO O BOT INICIAR
-client.once('ready', () => {
+// ==================== INICIALIZAÇÃO ====================
+
+client.once('ready', async () => {
     console.log('══════════════════════════════════════════════');
     console.log(`✅ BOT CONECTADO: ${client.user.tag}`);
-    console.log(`📊 Monitorando ${SITES.length} sites:`);
-    SITES.forEach((site, i) => {
-        console.log(`   ${i + 1}. ${site.name}`);
-    });
+    
+    // Carregar histórico
+    await loadHistory();
+    
+    console.log(`📊 Monitorando ${SITES.length} sites`);
     console.log(`⏱️  Verificação: A cada ${CONFIG.checkInterval / 60000} minutos`);
-    console.log(`📢 Canal de notificação: ${CONFIG.channelName}`);
+    console.log(`📢 Canal: ${CONFIG.channelName}`);
     console.log('══════════════════════════════════════════════\n');
     
     // Definir status
@@ -310,15 +380,12 @@ client.once('ready', () => {
     // Iniciar verificações periódicas
     setInterval(checkAllSites, CONFIG.checkInterval);
     
-    // Primeira verificação em 15 segundos
-    setTimeout(checkAllSites, 15000);
+    // Primeira verificação em 10 segundos
+    setTimeout(checkAllSites, 10000);
 });
 
-// INICIAR BOT
+// Iniciar bot
 client.login(CONFIG.token).catch(error => {
     console.error('❌ ERRO AO CONECTAR:', error.message);
-    console.log('👉 Verifique:');
-    console.log('   1. Se o token está correto');
-    console.log('   2. Se o bot foi adicionado ao servidor');
     process.exit(1);
 });
