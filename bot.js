@@ -1,17 +1,14 @@
 const { Client, GatewayIntentBits, EmbedBuilder } = require('discord.js');
 const axios = require('axios');
 const cheerio = require('cheerio');
-const fs = require('fs').promises;
-const path = require('path');
 
 console.log("🚀 Iniciando bot de monitoramento...");
 
 // CONFIGURAÇÃO
 const CONFIG = {
     token: process.env.DISCORD_TOKEN,
-    checkInterval: 5 * 60 * 1000, // 5 minutos
-    channelName: 'notificacoes',
-    historyFile: 'history.json'
+    checkInterval: 10 * 60 * 1000, // AUMENTEI PARA 10 MINUTOS
+    channelName: 'notificacoes'
 };
 
 // Verificar token
@@ -42,84 +39,62 @@ const SITES = [
     }
 ];
 
-// Histórico (será carregado do arquivo)
-let detectedItems = {
-    diario: [],
-    concurso: [], 
-    prefeitura: []
-};
-
-// Criar cliente Discord
-const client = new Client({
-    intents: [
-        GatewayIntentBits.Guilds,
-        GatewayIntentBits.GuildMessages,
-        GatewayIntentBits.MessageContent
-    ]
-});
-
-// ==================== FUNÇÕES DE HISTÓRICO ====================
-
-// Salvar histórico em arquivo
-async function saveHistory() {
+// HISTÓRICO - Carregar das variáveis de ambiente
+function loadHistory() {
+    const history = {
+        diario: [],
+        concurso: [], 
+        prefeitura: [],
+        lastCheck: null
+    };
+    
     try {
-        await fs.writeFile(
-            CONFIG.historyFile, 
-            JSON.stringify(detectedItems, null, 2)
-        );
-        console.log('💾 Histórico salvo');
-    } catch (error) {
-        console.error('❌ Erro ao salvar histórico:', error.message);
-    }
-}
-
-// Carregar histórico do arquivo
-async function loadHistory() {
-    try {
-        const data = await fs.readFile(CONFIG.historyFile, 'utf8');
-        const loaded = JSON.parse(data);
-        
-        // Validar estrutura
-        if (loaded.diario && loaded.concurso && loaded.prefeitura) {
-            detectedItems = loaded;
-            console.log(`📚 Histórico carregado:`);
-            console.log(`   Diário: ${detectedItems.diario.length} itens`);
-            console.log(`   Concursos: ${detectedItems.concurso.length} itens`);
-            console.log(`   Prefeitura: ${detectedItems.prefeitura.length} itens`);
+        if (process.env.HISTORY_DIARIO) {
+            history.diario = JSON.parse(process.env.HISTORY_DIARIO);
         }
+        if (process.env.HISTORY_CONCURSO) {
+            history.concurso = JSON.parse(process.env.HISTORY_CONCURSO);
+        }
+        if (process.env.HISTORY_PREFEITURA) {
+            history.prefeitura = JSON.parse(process.env.HISTORY_PREFEITURA);
+        }
+        if (process.env.LAST_CHECK) {
+            history.lastCheck = process.env.LAST_CHECK;
+        }
+        
+        console.log('📚 Histórico carregado:');
+        console.log(`   Diário: ${history.diario.length} itens`);
+        console.log(`   Concursos: ${history.concurso.length} itens`);
+        console.log(`   Prefeitura: ${history.prefeitura.length} itens`);
+        
+        return history;
     } catch (error) {
-        // Arquivo não existe ainda - criar novo
         console.log('📝 Criando novo histórico...');
-        await saveHistory();
+        return history;
     }
 }
 
-// Gerar ID único para um item (para evitar duplicatas)
-function generateItemId(text, siteType) {
-    // Extrair partes importantes para criar ID
-    const cleanText = text.toLowerCase()
+// Inicializar histórico
+let detectedItems = loadHistory();
+
+// FUNÇÃO PARA GERAR ID ÚNICO (MAIS SIMPLES)
+function generateItemId(text) {
+    // Extrair números e datas para criar ID
+    const numbers = (text.match(/\d+/g) || []).join('');
+    const first50 = text.toLowerCase()
         .replace(/[^a-z0-9]/g, '')
         .substring(0, 50);
     
-    // Extrair datas (dd/mm/aaaa ou aaaa-mm-dd)
-    const dateMatch = text.match(/\d{2}\/\d{2}\/\d{4}|\d{4}-\d{2}-\d{2}/);
-    const datePart = dateMatch ? dateMatch[0].replace(/\D/g, '') : '';
-    
-    // Extrair números de edição
-    const editionMatch = text.match(/\d+\/\d+|\d+/);
-    const editionPart = editionMatch ? editionMatch[0].replace(/\D/g, '') : '';
-    
-    return `${siteType}_${editionPart}_${datePart}_${cleanText.substring(0, 20)}`;
+    return `${numbers}_${first50}`.substring(0, 100);
 }
 
-// ==================== FUNÇÕES DE MONITORAMENTO ====================
-
+// FUNÇÃO PARA VERIFICAR SITE
 async function checkSite(site) {
     try {
-        console.log(`  📄 Verificando: ${site.name}`);
+        console.log(`  📄 ${site.name}`);
         
         const response = await axios.get(site.url, {
-            timeout: 10000,
+            timeout: 15000,
             headers: { 'User-Agent': 'Mozilla/5.0' }
         });
         
@@ -128,43 +103,34 @@ async function checkSite(site) {
         const newItems = [];
         
         if (matches) {
-            console.log(`    ✅ ${matches.length} padrão(ões) encontrado(s)`);
+            // Pegar apenas os PRIMEIROS 5 matches (mais recentes)
+            const recentMatches = matches.slice(0, 5);
+            console.log(`    ✅ ${recentMatches.length} item(s) recente(s)`);
             
-            // Processar cada match
-            matches.forEach(match => {
+            recentMatches.forEach(match => {
                 const cleanMatch = match.trim()
                     .replace(/\s+/g, ' ')
-                    .substring(0, 200);
+                    .substring(0, 150);
                 
-                // Gerar ID único
-                const itemId = generateItemId(cleanMatch, site.type);
+                const itemId = generateItemId(cleanMatch);
                 
-                // Verificar se já existe
+                // Verificar se já existe no histórico
                 if (!detectedItems[site.type].includes(itemId)) {
-                    newItems.push({
-                        text: cleanMatch,
-                        id: itemId,
-                        timestamp: new Date().toISOString()
-                    });
-                    
+                    newItems.push(cleanMatch);
                     detectedItems[site.type].push(itemId);
                     
-                    // Limitar histórico a 100 itens por tipo
-                    if (detectedItems[site.type].length > 100) {
-                        detectedItems[site.type] = detectedItems[site.type].slice(-100);
+                    // Manter apenas últimos 20 itens
+                    if (detectedItems[site.type].length > 20) {
+                        detectedItems[site.type] = detectedItems[site.type].slice(-20);
                     }
                 }
             });
             
             if (newItems.length > 0) {
-                console.log(`    🎯 ${newItems.length} NOVO(S) ITEM(S)!`);
-                
-                // Salvar histórico imediatamente
-                await saveHistory();
-                
-                return newItems.map(item => item.text);
+                console.log(`    🎯 ${newItems.length} NOVO(S)!`);
+                return newItems;
             } else {
-                console.log(`    📭 Todos os itens já foram notificados anteriormente`);
+                console.log(`    📭 Já notificados anteriormente`);
             }
         }
         
@@ -176,6 +142,7 @@ async function checkSite(site) {
     }
 }
 
+// FUNÇÃO DE NOTIFICAÇÃO SIMPLIFICADA
 async function sendNotification(site, newItems) {
     try {
         const channel = client.channels.cache.find(ch => 
@@ -183,209 +150,151 @@ async function sendNotification(site, newItems) {
         );
         
         if (!channel) {
-            console.log(`    ⚠️ Canal "${CONFIG.channelName}" não encontrado!`);
+            console.log(`    ⚠️ Canal não encontrado`);
             return;
         }
         
-        // Definir estilo
-        let color, emoji;
-        switch (site.type) {
-            case 'diario': color = 0x0099FF; emoji = '📰'; break;
-            case 'concurso': color = 0xFF9900; emoji = '📋'; break;
-            case 'prefeitura': color = 0x00AA00; emoji = '🏛️'; break;
-            default: color = 0x7289DA; emoji = '📢';
-        }
+        // Escolher cor
+        let color;
+        if (site.type === 'diario') color = 0x0099FF;
+        else if (site.type === 'concurso') color = 0xFF9900;
+        else color = 0x00AA00;
         
         const embed = new EmbedBuilder()
             .setColor(color)
-            .setTitle(`${emoji} NOVA ATUALIZAÇÃO - ${site.name}`)
-            .setURL(site.url)
-            .setDescription(`**Fonte:** ${site.name}\n**Hora:** ${new Date().toLocaleTimeString('pt-BR')}`)
+            .setTitle(`📢 ${site.name}`)
+            .setDescription(`**Nova atualização detectada**\nHora: ${new Date().toLocaleTimeString('pt-BR')}`)
             .setTimestamp();
         
         // Adicionar itens (máximo 3)
         newItems.slice(0, 3).forEach((item, index) => {
             embed.addFields({
-                name: `📌 Item ${index + 1}`,
-                value: item.length > 150 ? item.substring(0, 150) + '...' : item,
+                name: `Item ${index + 1}`,
+                value: item,
                 inline: false
             });
         });
         
-        if (newItems.length > 3) {
-            embed.addFields({
-                name: '📊 Mais itens',
-                value: `+${newItems.length - 3} item(s) adicionais`,
-                inline: false
-            });
-        }
-        
         await channel.send({ embeds: [embed] });
-        console.log(`    📨 Notificação enviada: ${newItems.length} item(s)`);
+        console.log(`    📨 Notificação enviada`);
         
     } catch (error) {
-        console.log(`    ❌ Erro ao notificar: ${error.message}`);
+        console.log(`    ❌ Erro: ${error.message}`);
     }
 }
 
+// VERIFICAÇÃO PRINCIPAL
 async function checkAllSites() {
-    console.log(`\n🔍 [${new Date().toLocaleTimeString('pt-BR')}] VERIFICAÇÃO INICIADA`);
-    console.log('='.repeat(50));
+    console.log(`\n🔍 [${new Date().toLocaleTimeString('pt-BR')}] VERIFICAÇÃO`);
+    console.log('─'.repeat(50));
     
-    let totalNewItems = 0;
+    let hasNewItems = false;
     
     for (const site of SITES) {
         const newItems = await checkSite(site);
         
         if (newItems.length > 0) {
+            hasNewItems = true;
             await sendNotification(site, newItems);
-            totalNewItems += newItems.length;
         }
         
-        await new Promise(resolve => setTimeout(resolve, 3000));
+        // Aguardar entre sites
+        await new Promise(resolve => setTimeout(resolve, 2000));
     }
     
-    console.log(`[${new Date().toLocaleTimeString('pt-BR')}] ✅ VERIFICAÇÃO CONCLUÍDA`);
-    console.log(`   📊 Total de novos itens: ${totalNewItems}`);
+    // Atualizar timestamp da última verificação
+    detectedItems.lastCheck = new Date().toISOString();
+    
+    console.log(`[${new Date().toLocaleTimeString('pt-BR')}] ✅ CONCLUÍDA`);
+    console.log(`   📊 Novos itens: ${hasNewItems ? 'Sim' : 'Não'}`);
     console.log('');
+    
+    // Mostrar instrução para salvar histórico
+    if (hasNewItems) {
+        console.log('💡 **ATENÇÃO:** Para evitar notificações repetidas:');
+        console.log('1. Copie os IDs abaixo para as variáveis de ambiente no Render');
+        console.log('2. Vá em Environment → Add Environment Variable');
+        console.log('');
+        console.log('Diário CONSAÚDE:');
+        console.log('Key: HISTORY_DIARIO');
+        console.log(`Value: ${JSON.stringify(detectedItems.diario)}`);
+        console.log('');
+        console.log('Concursos CONSAÚDE:');
+        console.log('Key: HISTORY_CONCURSO');
+        console.log(`Value: ${JSON.stringify(detectedItems.concurso)}`);
+        console.log('');
+        console.log('Prefeitura Iguape:');
+        console.log('Key: HISTORY_PREFEITURA');
+        console.log(`Value: ${JSON.stringify(detectedItems.prefeitura)}`);
+        console.log('');
+    }
 }
 
-// ==================== COMANDOS ====================
-
+// COMANDOS SIMPLIFICADOS
 client.on('messageCreate', async (message) => {
     if (message.author.bot || !message.content.startsWith('!')) return;
     
-    const args = message.content.slice(1).trim().split(/ +/);
-    const command = args.shift()?.toLowerCase();
+    const command = message.content.slice(1).toLowerCase().split(' ')[0];
     
-    if (!command) return;
-    
-    try {
-        switch (command) {
-            case 'status':
-                const embed = new EmbedBuilder()
-                    .setColor(0x7289DA)
-                    .setTitle('📊 STATUS DO SISTEMA')
-                    .setDescription('Monitoramento ativo 24/7')
-                    .addFields(
-                        {
-                            name: '📰 Diário CONSAÚDE',
-                            value: `Itens detectados: ${detectedItems.diario.length}`,
-                            inline: true
-                        },
-                        {
-                            name: '📋 Concursos CONSAÚDE',
-                            value: `Itens detectados: ${detectedItems.concurso.length}`,
-                            inline: true
-                        },
-                        {
-                            name: '🏛️ Prefeitura Iguape',
-                            value: `Itens detectados: ${detectedItems.prefeitura.length}`,
-                            inline: true
-                        }
-                    )
-                    .addFields({
-                        name: '⏱️ Configurações',
-                        value: `Verificação: A cada ${CONFIG.checkInterval / 60000} minutos\nCanal: ${CONFIG.channelName}\nPróxima: ${new Date(Date.now() + CONFIG.checkInterval).toLocaleTimeString('pt-BR')}`,
-                        inline: false
-                    })
-                    .setTimestamp();
-                
-                await message.reply({ embeds: [embed] });
-                break;
-                
-            case 'verificar':
-                await message.reply('🔄 Verificando todos os sites agora...');
-                await checkAllSites();
-                await message.reply(`✅ Verificação concluída!`);
-                break;
-                
-            case 'limpar':
-                // Comando para limpar histórico (apenas dono do bot)
-                if (message.author.id === 'SEU_ID_DO_DISCORD') {
-                    detectedItems = { diario: [], concurso: [], prefeitura: [] };
-                    await saveHistory();
-                    await message.reply('🧹 Histórico limpo! Próxima verificação notificará tudo como novo.');
-                } else {
-                    await message.reply('⛔ Apenas o administrador pode usar este comando.');
-                }
-                break;
-                
-            case 'testar':
-                await message.reply('🧪 Testando detecção...');
-                
-                // Testar cada site individualmente
-                for (const site of SITES) {
-                    await message.channel.send(`**Testando:** ${site.name}`);
-                    const items = await checkSite(site);
-                    
-                    if (items.length > 0) {
-                        await message.channel.send(`✅ ${items.length} novo(s) item(s) detectado(s)`);
-                    } else {
-                        await message.channel.send(`📭 Nenhum novo item (já notificados: ${detectedItems[site.type].length})`);
-                    }
-                    
-                    await new Promise(resolve => setTimeout(resolve, 2000));
-                }
-                break;
-                
-            case 'ajuda':
-                const ajuda = `
-**🤖 COMANDOS DISPONÍVEIS:**
-
-\`!status\` - Mostra status do sistema
-\`!verificar\` - Força verificação manual
-\`!testar\` - Testa cada site individualmente
-\`!ajuda\` - Mostra esta mensagem
-
-**🔧 Administrador:**
-\`!limpar\` - Limpa histórico de notificações
-
-O bot verifica automaticamente a cada 5 minutos.
-                `;
-                await message.reply(ajuda);
-                break;
-                
-            case 'ping':
-                const pingTime = Date.now() - message.createdTimestamp;
-                await message.reply(`🏓 Pong! Latência: ${pingTime}ms`);
-                break;
-        }
-    } catch (error) {
-        console.error('Erro no comando:', error);
-        await message.reply('❌ Ocorreu um erro ao processar o comando.');
+    switch (command) {
+        case 'status':
+            const embed = new EmbedBuilder()
+                .setColor(0x7289DA)
+                .setTitle('🤖 STATUS')
+                .setDescription(`Última verificação: ${detectedItems.lastCheck ? new Date(detectedItems.lastCheck).toLocaleString('pt-BR') : 'Nunca'}`)
+                .addFields(
+                    { name: '📰 Diário', value: `${detectedItems.diario.length} itens`, inline: true },
+                    { name: '📋 Concursos', value: `${detectedItems.concurso.length} itens`, inline: true },
+                    { name: '🏛️ Prefeitura', value: `${detectedItems.prefeitura.length} itens`, inline: true }
+                )
+                .addFields({
+                    name: '⏱️ Próxima',
+                    value: `Em ${CONFIG.checkInterval / 60000} minutos`,
+                    inline: false
+                })
+                .setTimestamp();
+            
+            await message.reply({ embeds: [embed] });
+            break;
+            
+        case 'verificar':
+            await message.reply('🔄 Verificando...');
+            await checkAllSites();
+            break;
+            
+        case 'historico':
+            await message.reply(`📊 **Histórico atual:**\n` +
+                `• Diário: ${detectedItems.diario.length}\n` +
+                `• Concursos: ${detectedItems.concurso.length}\n` +
+                `• Prefeitura: ${detectedItems.prefeitura.length}`);
+            break;
+            
+        case 'ajuda':
+            await message.reply(`**Comandos:**\n` +
+                `\`!status\` - Status do sistema\n` +
+                `\`!verificar\` - Verificar agora\n` +
+                `\`!historico\` - Ver histórico\n` +
+                `\`!ajuda\` - Esta mensagem`);
+            break;
     }
 });
 
-// ==================== INICIALIZAÇÃO ====================
-
-client.once('ready', async () => {
-    console.log('══════════════════════════════════════════════');
-    console.log(`✅ BOT CONECTADO: ${client.user.tag}`);
+// INICIALIZAÇÃO
+client.once('ready', () => {
+    console.log('══════════════════════════════════');
+    console.log(`✅ BOT: ${client.user.tag}`);
+    console.log(`📊 Sites: ${SITES.length}`);
+    console.log(`⏱️  Intervalo: ${CONFIG.checkInterval / 60000} min`);
+    console.log('══════════════════════════════════\n');
     
-    // Carregar histórico
-    await loadHistory();
+    client.user.setActivity({ name: 'monitoramento', type: 3 });
     
-    console.log(`📊 Monitorando ${SITES.length} sites`);
-    console.log(`⏱️  Verificação: A cada ${CONFIG.checkInterval / 60000} minutos`);
-    console.log(`📢 Canal: ${CONFIG.channelName}`);
-    console.log('══════════════════════════════════════════════\n');
-    
-    // Definir status
-    client.user.setActivity({
-        name: 'por atualizações',
-        type: 3 // WATCHING
-    });
-    
-    // Iniciar verificações periódicas
+    // Verificar a cada X minutos
     setInterval(checkAllSites, CONFIG.checkInterval);
     
-    // Primeira verificação em 10 segundos
-    setTimeout(checkAllSites, 10000);
+    // Primeira em 30 segundos
+    setTimeout(checkAllSites, 30000);
 });
 
-// Iniciar bot
-client.login(CONFIG.token).catch(error => {
-    console.error('❌ ERRO AO CONECTAR:', error.message);
-    process.exit(1);
-});
+// INICIAR
+client.login(CONFIG.token);
