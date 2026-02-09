@@ -1,18 +1,11 @@
 {
-  "name": "bot-monitor-oficial",
-  "version": "3.0.0",
-  "description": "Bot para monitorar Diário Oficial e Concursos",
-  "main": "index.js",
+  "name": "bot-simples",
+  "version": "1.0.0",
+  "main": "bot.js",
   "scripts": {
-    "start": "node index.js",
-    "test": "echo \"✅ Bot pronto\" && exit 0"
+    "start": "node bot.js"
   },
-  "keywords": ["discord", "bot", "monitor", "notificacoes"],
-  "author": "Você",
-  "license": "MIT",
   "dependencies": {
-    "discord.js": "^14.14.1",
-    "axios": "^1.6.0",
-    "cheerio": "^1.0.0-rc.12"
+    "discord.js": "^14.14.1"
   }
 }
