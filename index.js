@@ -1,22 +1,25 @@
-// FIX para o erro "File is not defined" no Node.js 18
-if (typeof File === 'undefined') {
-  global.File = class File {
-    constructor() {
-      throw new Error('File class not implemented');
-    }
-  };
+// FIX PARA RAILWAY - Node.js 18 compatibilidade
+if (typeof global.File === 'undefined') {
+  class MockFile {
+    constructor() {}
+  }
+  global.File = MockFile;
 }
+
 const { Client, GatewayIntentBits, EmbedBuilder } = require('discord.js');
 const axios = require('axios');
 const cheerio = require('cheerio');
-const client = new Client({
-    intents: [
-        GatewayIntentBits.Guilds,
-        GatewayIntentBits.GuildMessages,
-        GatewayIntentBits.MessageContent
-    ]
-});
+
 console.log("🚀 Iniciando bot de monitoramento...");
+
+// CONFIGURAÇÃO (DEVE VIR ANTES DOS LOGS)
+const CONFIG = {
+    token: process.env.DISCORD_TOKEN,
+    checkInterval: 10 * 60 * 1000,
+    channelName: 'notificacoes'
+};
+
+// AGORA sim você pode fazer logs de debug:
 console.log("Token length:", CONFIG.token ? CONFIG.token.length : "null");
 console.log("Token starts with:", CONFIG.token ? CONFIG.token.substring(0, 20) + "..." : "null");
 
