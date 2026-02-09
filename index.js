@@ -301,7 +301,52 @@ client.once('ready', () => {
     // Primeira em 30 segundos
     setTimeout(checkAllSites, 30000);
 });
+// Adicione logs de eventos
+client.on('debug', console.log);
+client.on('warn', console.log);
+client.on('error', console.error);
 
+// Log de conexão
+client.on('ready', () => {
+    console.log('══════════════════════════════════');
+    console.log(`✅ BOT CONECTADO: ${client.user.tag}`);
+    console.log(`📊 ID: ${client.user.id}`);
+    console.log(`📊 Servidores: ${client.guilds.cache.size}`);
+    console.log(`⏱️  Intervalo: ${CONFIG.checkInterval / 60000} min`);
+    console.log('══════════════════════════════════\n');
+    
+    client.user.setActivity({ name: 'monitoramento', type: 3 });
+    
+    // Verificar a cada X minutos
+    setInterval(checkAllSites, CONFIG.checkInterval);
+    
+    // Primeira em 30 segundos
+    setTimeout(checkAllSites, 30000);
+});
+
+// Log quando receber mensagem
+client.on('messageCreate', async (message) => {
+    console.log(`📨 Mensagem de ${message.author.tag}: ${message.content}`);
+    
+    if (message.author.bot || !message.content.startsWith('!')) return;
+    
+    const command = message.content.slice(1).toLowerCase().split(' ')[0];
+    console.log(`🤖 Comando detectado: ${command}`);
+    
+    // ... resto do código dos comandos continua igual
+});
+
+// Log de desconexão
+client.on('disconnect', () => console.log('❌ Desconectado do Discord'));
+client.on('reconnecting', () => console.log('🔄 Reconectando...'));
+
+// INICIAR COM TRY/CATCH
+try {
+    console.log('🔐 Tentando login com token...');
+    client.login(CONFIG.token);
+} catch (error) {
+    console.error('❌ ERRO NO LOGIN:', error);
+}
 // INICIAR
 client.login(CONFIG.token);
 // Servidor HTTP simples para o Render
