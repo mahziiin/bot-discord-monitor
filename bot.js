@@ -1,15 +1,13 @@
 const { Client, GatewayIntentBits, EmbedBuilder } = require('discord.js');
 const axios = require('axios');
 const cheerio = require('cheerio');
-const { Client, GatewayIntentBits } = require('discord.js');
 
 const client = new Client({
     intents: [
         GatewayIntentBits.Guilds,
         GatewayIntentBits.GuildMessages,
-        GatewayIntentBits.MessageContent, // ← ESSE É IMPORTANTE para ler mensagens!
+        GatewayIntentBits.MessageContent,
         GatewayIntentBits.GuildMembers,
-        // Adicione outros intents conforme necessário
     ]
 });
 
