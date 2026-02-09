@@ -1,130 +1,140 @@
-// ==================== CONFIGURAÇÃO ====================
-require('dotenv').config();
+const { Client, GatewayIntentBits, EmbedBuilder } = require('discord.js');
+const axios = require('axios');
+const cheerio = require('cheerio');
 
+console.log("🚀 Iniciando bot de monitoramento...");
+
+// CONFIGURAÇÃO
 const CONFIG = {
-    // OBTER DO RENDER (Environment Variables)
-    DISCORD_TOKEN: process.env.DISCORD_TOKEN || '',
-    
-    // CONFIGURAÇÕES DO BOT
-    CHECK_INTERVAL: 10 * 60 * 1000, // 10 minutos
-    NOTIFICATION_CHANNEL: 'notificacoes',
-    
-    // SITES PARA MONITORAR
-    SITES: [
-        {
-            name: '📰 Diário Oficial CONSAÚDE',
-            url: 'https://consaude.org.br/diario-oficial/',
-            type: 'diario',
-            patterns: ['EDIÇÃO:', 'Edição:', 'Edicao:']
-        },
-        {
-            name: '📋 Concursos CONSAÚDE', 
-            url: 'https://consaude.org.br/ver-concurso/?n=3',
-            type: 'concurso',
-            patterns: ['Edital de Convocação', 'ERRATA', 'CONVOCAÇÃO']
-        },
-        {
-            name: '🏛️ Diário Prefeitura Iguape',
-            url: 'https://www.iguape.sp.gov.br/portal/diario-oficial',
-            type: 'prefeitura',
-            patterns: ['Edição n', 'Edição nº', 'Edicao n']
-        }
-    ]
+    token: process.env.DISCORD_TOKEN,
+    checkInterval: 10 * 60 * 1000, // AUMENTEI PARA 10 MINUTOS
+    channelName: 'notificacoes'
 };
 
-// ==================== VERIFICAÇÃO INICIAL ====================
-console.log('🔧 Verificando configurações...');
-
-if (!CONFIG.DISCORD_TOKEN || CONFIG.DISCORD_TOKEN === '') {
-    console.error('❌ ERRO CRÍTICO: DISCORD_TOKEN não configurado!');
-    console.log('👉 SOLUÇÃO: No Render.com, vá em:');
-    console.log('   1. Seu serviço → Environment');
-    console.log('   2. Clique "Add Environment Variable"');
-    console.log('   3. Key: DISCORD_TOKEN');
-    console.log('   4. Value: SEU_TOKEN_DO_BOT');
-    console.log('   5. Faça deploy manual');
+// Verificar token
+if (!CONFIG.token) {
+    console.error('❌ ERRO: DISCORD_TOKEN não configurado!');
     process.exit(1);
 }
 
-console.log('✅ Configuração OK');
-console.log(`📊 Sites para monitorar: ${CONFIG.SITES.length}`);
+// SITES PARA MONITORAR
+const SITES = [
+    {
+        name: 'Diário Oficial CONSAÚDE',
+        url: 'https://consaude.org.br/diario-oficial/',
+        pattern: /EDIÇÃO:|Edição:|Edicao:/gi,
+        type: 'diario'
+    },
+    {
+        name: 'Concursos CONSAÚDE',
+        url: 'https://consaude.org.br/ver-concurso/?n=3',
+        pattern: /Edital de Convocação|ERRATA|CONVOCAÇÃO/gi,
+        type: 'concurso'
+    },
+    {
+        name: 'Diário Prefeitura Iguape',
+        url: 'https://www.iguape.sp.gov.br/portal/diario-oficial',
+        pattern: /Edição n|Edição nº|Edicao n/gi,
+        type: 'prefeitura'
+    }
+];
 
-// ==================== IMPORTAR BIBLIOTECAS ====================
-console.log('📦 Carregando bibliotecas...');
-
-let discord, axios, cheerio;
-try {
-    discord = require('discord.js');
-    axios = require('axios');
-    cheerio = require('cheerio');
-    console.log('✅ Bibliotecas carregadas');
-} catch (error) {
-    console.error('❌ Erro ao carregar bibliotecas:', error.message);
-    console.log('👉 Execute no terminal: npm install');
-    process.exit(1);
-}
-
-const { Client, GatewayIntentBits, EmbedBuilder } = discord;
-
-// ==================== BOT PRINCIPAL ====================
-console.log('🤖 Iniciando bot Discord...');
-
-const client = new Client({
-    intents: [
-        GatewayIntentBits.Guilds,
-        GatewayIntentBits.GuildMessages,
-        GatewayIntentBits.MessageContent
-    ]
-});
-
-// Histórico em memória (simples)
-let history = {
-    lastCheck: null,
-    items: []
-};
-
-// ==================== FUNÇÕES DO BOT ====================
-
-// Função para verificar UM site
-async function checkWebsite(site) {
-    console.log(`  🔍 Verificando: ${site.name}`);
+// HISTÓRICO - Carregar das variáveis de ambiente
+function loadHistory() {
+    const history = {
+        diario: [],
+        concurso: [], 
+        prefeitura: [],
+        lastCheck: null
+    };
     
     try {
-        // Fazer requisição
+        if (process.env.HISTORY_DIARIO) {
+            history.diario = JSON.parse(process.env.HISTORY_DIARIO);
+        }
+        if (process.env.HISTORY_CONCURSO) {
+            history.concurso = JSON.parse(process.env.HISTORY_CONCURSO);
+        }
+        if (process.env.HISTORY_PREFEITURA) {
+            history.prefeitura = JSON.parse(process.env.HISTORY_PREFEITURA);
+        }
+        if (process.env.LAST_CHECK) {
+            history.lastCheck = process.env.LAST_CHECK;
+        }
+        
+        console.log('📚 Histórico carregado:');
+        console.log(`   Diário: ${history.diario.length} itens`);
+        console.log(`   Concursos: ${history.concurso.length} itens`);
+        console.log(`   Prefeitura: ${history.prefeitura.length} itens`);
+        
+        return history;
+    } catch (error) {
+        console.log('📝 Criando novo histórico...');
+        return history;
+    }
+}
+
+// Inicializar histórico
+let detectedItems = loadHistory();
+
+// FUNÇÃO PARA GERAR ID ÚNICO (MAIS SIMPLES)
+function generateItemId(text) {
+    // Extrair números e datas para criar ID
+    const numbers = (text.match(/\d+/g) || []).join('');
+    const first50 = text.toLowerCase()
+        .replace(/[^a-z0-9]/g, '')
+        .substring(0, 50);
+    
+    return `${numbers}_${first50}`.substring(0, 100);
+}
+
+// FUNÇÃO PARA VERIFICAR SITE
+async function checkSite(site) {
+    try {
+        console.log(`  📄 ${site.name}`);
+        
         const response = await axios.get(site.url, {
             timeout: 15000,
-            headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-            }
+            headers: { 'User-Agent': 'Mozilla/5.0' }
         });
         
-        // Analisar HTML
-        const $ = cheerio.load(response.data);
-        const pageText = $('body').text();
+        const text = response.data;
+        const matches = text.match(site.pattern);
+        const newItems = [];
         
-        // Procurar padrões
-        const foundItems = [];
-        
-        site.patterns.forEach(pattern => {
-            if (pageText.includes(pattern)) {
-                // Encontrar contexto ao redor do padrão
-                const index = pageText.indexOf(pattern);
-                if (index !== -1) {
-                    const start = Math.max(0, index - 50);
-                    const end = Math.min(pageText.length, index + 150);
-                    const context = pageText.substring(start, end).trim();
+        if (matches) {
+            // Pegar apenas os PRIMEIROS 5 matches (mais recentes)
+            const recentMatches = matches.slice(0, 5);
+            console.log(`    ✅ ${recentMatches.length} item(s) recente(s)`);
+            
+            recentMatches.forEach(match => {
+                const cleanMatch = match.trim()
+                    .replace(/\s+/g, ' ')
+                    .substring(0, 150);
+                
+                const itemId = generateItemId(cleanMatch);
+                
+                // Verificar se já existe no histórico
+                if (!detectedItems[site.type].includes(itemId)) {
+                    newItems.push(cleanMatch);
+                    detectedItems[site.type].push(itemId);
                     
-                    foundItems.push({
-                        pattern: pattern,
-                        text: context,
-                        site: site.name
-                    });
+                    // Manter apenas últimos 20 itens
+                    if (detectedItems[site.type].length > 20) {
+                        detectedItems[site.type] = detectedItems[site.type].slice(-20);
+                    }
                 }
+            });
+            
+            if (newItems.length > 0) {
+                console.log(`    🎯 ${newItems.length} NOVO(S)!`);
+                return newItems;
+            } else {
+                console.log(`    📭 Já notificados anteriormente`);
             }
-        });
+        }
         
-        console.log(`    ✅ ${foundItems.length} item(s) encontrado(s)`);
-        return foundItems;
+        return [];
         
     } catch (error) {
         console.log(`    ❌ Erro: ${error.message}`);
@@ -132,217 +142,159 @@ async function checkWebsite(site) {
     }
 }
 
-// Função para enviar notificação
-async function sendNotification(channel, site, items) {
+// FUNÇÃO DE NOTIFICAÇÃO SIMPLIFICADA
+async function sendNotification(site, newItems) {
     try {
+        const channel = client.channels.cache.find(ch => 
+            ch.name === CONFIG.channelName && ch.isTextBased()
+        );
+        
+        if (!channel) {
+            console.log(`    ⚠️ Canal não encontrado`);
+            return;
+        }
+        
         // Escolher cor
         let color;
         if (site.type === 'diario') color = 0x0099FF;
         else if (site.type === 'concurso') color = 0xFF9900;
         else color = 0x00AA00;
         
-        // Criar embed
         const embed = new EmbedBuilder()
             .setColor(color)
             .setTitle(`📢 ${site.name}`)
-            .setURL(site.url)
-            .setDescription(`**Nova atualização detectada**\n📍 ${items.length} item(s) encontrado(s)`)
+            .setDescription(`**Nova atualização detectada**\nHora: ${new Date().toLocaleTimeString('pt-BR')}`)
             .setTimestamp();
         
         // Adicionar itens (máximo 3)
-        items.slice(0, 3).forEach((item, index) => {
+        newItems.slice(0, 3).forEach((item, index) => {
             embed.addFields({
                 name: `Item ${index + 1}`,
-                value: `\`\`\`${item.text}\`\`\``,
+                value: item,
                 inline: false
             });
         });
         
-        // Enviar
         await channel.send({ embeds: [embed] });
         console.log(`    📨 Notificação enviada`);
         
     } catch (error) {
-        console.log(`    ❌ Erro ao enviar: ${error.message}`);
+        console.log(`    ❌ Erro: ${error.message}`);
     }
 }
 
-// Verificar TODOS os sites
-async function checkAllWebsites() {
-    const now = new Date();
-    console.log(`\n🕒 [${now.toLocaleTimeString('pt-BR')}] INICIANDO VERIFICAÇÃO`);
+// VERIFICAÇÃO PRINCIPAL
+async function checkAllSites() {
+    console.log(`\n🔍 [${new Date().toLocaleTimeString('pt-BR')}] VERIFICAÇÃO`);
     console.log('─'.repeat(50));
     
-    for (const site of CONFIG.SITES) {
-        const items = await checkWebsite(site);
+    let hasNewItems = false;
+    
+    for (const site of SITES) {
+        const newItems = await checkSite(site);
         
-        if (items.length > 0) {
-            // Encontrar canal
-            const channel = client.channels.cache.find(
-                ch => ch.name === CONFIG.NOTIFICATION_CHANNEL
-            );
-            
-            if (channel) {
-                await sendNotification(channel, site, items);
-            } else {
-                console.log(`    ⚠️ Canal "${CONFIG.NOTIFICATION_CHANNEL}" não encontrado`);
-            }
-            
-            // Salvar no histórico
-            items.forEach(item => {
-                history.items.push({
-                    ...item,
-                    timestamp: now.toISOString()
-                });
-            });
+        if (newItems.length > 0) {
+            hasNewItems = true;
+            await sendNotification(site, newItems);
         }
         
-        // Aguardar 3 segundos entre sites
-        await new Promise(resolve => setTimeout(resolve, 3000));
+        // Aguardar entre sites
+        await new Promise(resolve => setTimeout(resolve, 2000));
     }
     
-    history.lastCheck = now.toISOString();
-    console.log(`✅ [${now.toLocaleTimeString('pt-BR')}] VERIFICAÇÃO CONCLUÍDA\n`);
+    // Atualizar timestamp da última verificação
+    detectedItems.lastCheck = new Date().toISOString();
+    
+    console.log(`[${new Date().toLocaleTimeString('pt-BR')}] ✅ CONCLUÍDA`);
+    console.log(`   📊 Novos itens: ${hasNewItems ? 'Sim' : 'Não'}`);
+    console.log('');
+    
+    // Mostrar instrução para salvar histórico
+    if (hasNewItems) {
+        console.log('💡 **ATENÇÃO:** Para evitar notificações repetidas:');
+        console.log('1. Copie os IDs abaixo para as variáveis de ambiente no Render');
+        console.log('2. Vá em Environment → Add Environment Variable');
+        console.log('');
+        console.log('Diário CONSAÚDE:');
+        console.log('Key: HISTORY_DIARIO');
+        console.log(`Value: ${JSON.stringify(detectedItems.diario)}`);
+        console.log('');
+        console.log('Concursos CONSAÚDE:');
+        console.log('Key: HISTORY_CONCURSO');
+        console.log(`Value: ${JSON.stringify(detectedItems.concurso)}`);
+        console.log('');
+        console.log('Prefeitura Iguape:');
+        console.log('Key: HISTORY_PREFEITURA');
+        console.log(`Value: ${JSON.stringify(detectedItems.prefeitura)}`);
+        console.log('');
+    }
 }
 
-// ==================== COMANDOS DO BOT ====================
-
+// COMANDOS SIMPLIFICADOS
 client.on('messageCreate', async (message) => {
-    // Ignorar mensagens de outros bots
-    if (message.author.bot) return;
-    
-    // Comandos começam com "!"
-    if (!message.content.startsWith('!')) return;
+    if (message.author.bot || !message.content.startsWith('!')) return;
     
     const command = message.content.slice(1).toLowerCase().split(' ')[0];
     
-    try {
-        switch (command) {
-            case 'status':
-                const embed = new EmbedBuilder()
-                    .setColor(0x00FF00)
-                    .setTitle('🤖 STATUS DO BOT')
-                    .setDescription('Sistema de monitoramento ativo')
-                    .addFields(
-                        {
-                            name: '📊 Sites monitorados',
-                            value: CONFIG.SITES.map(s => s.name).join('\n'),
-                            inline: false
-                        },
-                        {
-                            name: '⏱️ Última verificação',
-                            value: history.lastCheck 
-                                ? new Date(history.lastCheck).toLocaleString('pt-BR')
-                                : 'Nunca',
-                            inline: true
-                        },
-                        {
-                            name: '📈 Itens detectados',
-                            value: history.items.length.toString(),
-                            inline: true
-                        },
-                        {
-                            name: '🔔 Canal',
-                            value: CONFIG.NOTIFICATION_CHANNEL,
-                            inline: true
-                        }
-                    )
-                    .setFooter({ text: `Verificação a cada ${CONFIG.CHECK_INTERVAL / 60000} minutos` })
-                    .setTimestamp();
-                
-                await message.reply({ embeds: [embed] });
-                break;
-                
-            case 'verificar':
-                const msg = await message.reply('🔄 Verificando sites agora...');
-                await checkAllWebsites();
-                await msg.edit('✅ Verificação concluída!');
-                break;
-                
-            case 'sites':
-                const sitesList = CONFIG.SITES.map(s => 
-                    `• **${s.name}**\n  🔗 ${s.url}\n  🔍 Padrões: ${s.patterns.join(', ')}`
-                ).join('\n\n');
-                
-                await message.reply(`🌐 **SITES MONITORADOS:**\n\n${sitesList}`);
-                break;
-                
-            case 'ping':
-                const latency = Date.now() - message.createdTimestamp;
-                await message.reply(`🏓 Pong! Latência: ${latency}ms`);
-                break;
-                
-            case 'ajuda':
-                const help = `
-**🤖 COMANDOS DO BOT:**
-
-\`!status\` - Status do sistema
-\`!verificar\` - Verificar sites agora
-\`!sites\` - Lista de sites monitorados
-\`!ping\` - Testar latência
-\`!ajuda\` - Esta mensagem
-
-**⚙️ CONFIGURAÇÃO:**
-• Canal: ${CONFIG.NOTIFICATION_CHANNEL}
-• Intervalo: ${CONFIG.CHECK_INTERVAL / 60000} minutos
-• Sites: ${CONFIG.SITES.length}
-                `;
-                await message.reply(help);
-                break;
-                
-            case 'teste':
-                await message.reply('🧪 **TESTE DE CONEXÃO:**\n\n' +
-                    '1. ✅ Bot conectado ao Discord\n' +
-                    '2. ✅ Bibliotecas carregadas\n' +
-                    '3. ✅ Token configurado\n' +
-                    '4. ✅ Pronto para monitorar!');
-                break;
-        }
-    } catch (error) {
-        console.error('Erro no comando:', error);
-        await message.reply('❌ Erro ao processar comando');
+    switch (command) {
+        case 'status':
+            const embed = new EmbedBuilder()
+                .setColor(0x7289DA)
+                .setTitle('🤖 STATUS')
+                .setDescription(`Última verificação: ${detectedItems.lastCheck ? new Date(detectedItems.lastCheck).toLocaleString('pt-BR') : 'Nunca'}`)
+                .addFields(
+                    { name: '📰 Diário', value: `${detectedItems.diario.length} itens`, inline: true },
+                    { name: '📋 Concursos', value: `${detectedItems.concurso.length} itens`, inline: true },
+                    { name: '🏛️ Prefeitura', value: `${detectedItems.prefeitura.length} itens`, inline: true }
+                )
+                .addFields({
+                    name: '⏱️ Próxima',
+                    value: `Em ${CONFIG.checkInterval / 60000} minutos`,
+                    inline: false
+                })
+                .setTimestamp();
+            
+            await message.reply({ embeds: [embed] });
+            break;
+            
+        case 'verificar':
+            await message.reply('🔄 Verificando...');
+            await checkAllSites();
+            break;
+            
+        case 'historico':
+            await message.reply(`📊 **Histórico atual:**\n` +
+                `• Diário: ${detectedItems.diario.length}\n` +
+                `• Concursos: ${detectedItems.concurso.length}\n` +
+                `• Prefeitura: ${detectedItems.prefeitura.length}`);
+            break;
+            
+        case 'ajuda':
+            await message.reply(`**Comandos:**\n` +
+                `\`!status\` - Status do sistema\n` +
+                `\`!verificar\` - Verificar agora\n` +
+                `\`!historico\` - Ver histórico\n` +
+                `\`!ajuda\` - Esta mensagem`);
+            break;
     }
 });
 
-// ==================== EVENTOS DO BOT ====================
-
+// INICIALIZAÇÃO
 client.once('ready', () => {
-    console.log('══════════════════════════════════════════════');
-    console.log(`✅ BOT CONECTADO: ${client.user.tag}`);
-    console.log(`📊 Servidores: ${client.guilds.cache.size}`);
-    console.log(`⏱️  Intervalo: ${CONFIG.CHECK_INTERVAL / 60000} minutos`);
-    console.log(`📢 Canal: ${CONFIG.NOTIFICATION_CHANNEL}`);
-    console.log('══════════════════════════════════════════════\n');
+    console.log('══════════════════════════════════');
+    console.log(`✅ BOT: ${client.user.tag}`);
+    console.log(`📊 Sites: ${SITES.length}`);
+    console.log(`⏱️  Intervalo: ${CONFIG.checkInterval / 60000} min`);
+    console.log('══════════════════════════════════\n');
     
-    // Definir status do bot
-    client.user.setActivity({
-        name: `${CONFIG.SITES.length} sites`,
-        type: 3 // WATCHING
-    });
+    client.user.setActivity({ name: 'monitoramento', type: 3 });
     
-    // Iniciar verificações automáticas
-    setInterval(checkAllWebsites, CONFIG.CHECK_INTERVAL);
+    // Verificar a cada X minutos
+    setInterval(checkAllSites, CONFIG.checkInterval);
     
-    // Primeira verificação em 30 segundos
-    setTimeout(checkAllWebsites, 30000);
+    // Primeira em 30 segundos
+    setTimeout(checkAllSites, 30000);
 });
 
-client.on('error', (error) => {
-    console.error('❌ Erro do Discord:', error.message);
-});
-
-// ==================== INICIAR BOT ====================
-
-console.log('🔗 Conectando ao Discord...');
-
-client.login(CONFIG.DISCORD_TOKEN).catch(error => {
-    console.error('❌ ERRO AO CONECTAR:', error.message);
-    console.log('\n👉 SOLUÇÕES POSSÍVEIS:');
-    console.log('1. Token inválido - pegue novo em discord.com/developers');
-    console.log('2. Bot não adicionado ao servidor');
-    console.log('3. Permissões insuficientes');
-    console.log('\n🔗 Link para adicionar bot (substitua CLIENT_ID):');
-    console.log('https://discord.com/api/oauth2/authorize?client_id=SEU_CLIENT_ID&permissions=274877991936&scope=bot');
-    
-    process.exit(1);
-});
+// INICIAR
+client.login(CONFIG.token);
