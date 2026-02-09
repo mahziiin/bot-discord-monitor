@@ -1,3 +1,11 @@
+// FIX para o erro "File is not defined" no Node.js 18
+if (typeof File === 'undefined') {
+  global.File = class File {
+    constructor() {
+      throw new Error('File class not implemented');
+    }
+  };
+}
 const { Client, GatewayIntentBits, EmbedBuilder } = require('discord.js');
 const axios = require('axios');
 const cheerio = require('cheerio');
