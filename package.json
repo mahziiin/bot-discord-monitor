@@ -1,0 +1,19 @@
+{
+  "name": "bot-monitor-oficial",
+  "version": "4.0.0",
+  "description": "Bot do Discord para monitorar Diários Oficiais",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "nodemon index.js"
+  },
+  "keywords": ["discord", "bot", "monitor", "notificacoes"],
+  "author": "Você",
+  "license": "MIT",
+  "dependencies": {
+    "discord.js": "^14.14.1",
+    "axios": "^1.6.0",
+    "cheerio": "^1.0.0-rc.12",
+    "dotenv": "^16.3.1"
+  }
+}
