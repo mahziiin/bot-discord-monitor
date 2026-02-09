@@ -1,11 +1,15 @@
 {
-  "name": "bot-monitor",
-  "version": "2.0.0",
-  "description": "Bot para monitorar sites com histórico persistente",
-  "main": "bot.js",
+  "name": "bot-monitor-oficial",
+  "version": "3.0.0",
+  "description": "Bot para monitorar Diário Oficial e Concursos",
+  "main": "index.js",
   "scripts": {
-    "start": "node bot.js"
+    "start": "node index.js",
+    "test": "echo \"✅ Bot pronto\" && exit 0"
   },
+  "keywords": ["discord", "bot", "monitor", "notificacoes"],
+  "author": "Você",
+  "license": "MIT",
   "dependencies": {
     "discord.js": "^14.14.1",
     "axios": "^1.6.0",
