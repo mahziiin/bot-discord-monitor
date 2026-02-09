@@ -9,7 +9,15 @@ const client = new Client({
     ]
 });
 console.log("🚀 Iniciando bot de monitoramento...");
+console.log("Token length:", CONFIG.token ? CONFIG.token.length : "null");
+console.log("Token starts with:", CONFIG.token ? CONFIG.token.substring(0, 20) + "..." : "null");
 
+// Verificar formato do token
+if (CONFIG.token) {
+    const tokenParts = CONFIG.token.split('.');
+    console.log("Token parts:", tokenParts.length);
+    console.log("First part:", tokenParts[0]);
+}
 // CONFIGURAÇÃO
 const CONFIG = {
     token: process.env.DISCORD_TOKEN,
