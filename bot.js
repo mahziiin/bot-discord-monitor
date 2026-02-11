@@ -35,7 +35,7 @@ try {
     const CONFIG = {
         token: DISCORD_TOKEN,
         channelName: process.env.NOTIFICATION_CHANNEL || 'notificacoes',
-        checkInterval: 5 * 60 * 1000, // 5 minutos
+        checkInterval: 2 * 60 * 1000, // 2 minutos
         sites: [
             {
                 name: '📰 Diário Oficial CONSAÚDE',
